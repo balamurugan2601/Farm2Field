@@ -10,6 +10,9 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
+  orderBy,
+  limit,
+  getDocs
 } from 'firebase/firestore';
 import { db, auth } from '../services/firebase';
 import SensorSimulator from '../components/SensorSimulator';
@@ -27,6 +30,7 @@ export default function FarmerDashboard() {
   const [editingProductValue, setEditingProductValue] = useState('');
   const [suppliers, setSuppliers] = useState([]);
   const [assigning, setAssigning] = useState({}); // {orderId: supplierId}
+  const [sensorData, setSensorData] = useState({}); // {shipmentId: latestData}
 
   function handleFormChange(e) {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -117,6 +121,24 @@ export default function FarmerDashboard() {
     return () => { unsubList.forEach((u) => u()); };
   }, [user]);
 
+  // Listen for latest sensor data for each shipment every 3 seconds
+  useEffect(() => {
+    if (!shipments.length) return;
+    const interval = setInterval(async () => {
+      const newSensorData = {};
+      for (const s of shipments) {
+        const shipment = s.shipment || s; // handle both {shipment, ...} and shipment object
+        const q = query(collection(db, 'shipments', shipment.id, 'sensorData'), orderBy('timestamp', 'desc'), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          newSensorData[shipment.id] = snap.docs[0].data();
+        }
+      }
+      setSensorData(newSensorData);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [shipments]);
+
   async function triggerPayment() {
     if (!window.ethereum) {
       alert('MetaMask not detected!');
@@ -157,7 +179,6 @@ export default function FarmerDashboard() {
       });
       await updateDoc(doc(db, 'orders', order.id), {
         supplierId,
-        status: 'assigned',
         statusUpdatedAt: serverTimestamp(),
       });
       alert('Shipment assigned!');
@@ -174,6 +195,36 @@ export default function FarmerDashboard() {
           <p className="text-emerald-700">Real-time Monitoring & Alerts</p>
         </div>
         <SensorSimulator />
+        {/* Live Sensor Data Block (copied from SupplierDashboard) */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 shadow-xl p-8 mb-8">
+          <h2 className="text-2xl font-semibold text-emerald-900 mb-4">🚚 Live Sensor Data for Your Shipments</h2>
+          {shipments.length === 0 ? (
+            <p className="text-emerald-600 italic">No shipments assigned yet.</p>
+          ) : (
+            <div className="grid gap-6 sm:grid-cols-2">
+              {shipments.map(({ shipment }) => (
+                <div key={shipment.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  <div className="font-bold text-emerald-900 mb-2">Shipment ID: {shipment.id}</div>
+                  <div className="text-emerald-800 mb-1">Product: {productMap[shipment.productId]?.name || shipment.productId}</div>
+                  <div className="text-emerald-800 mb-1">Status: {shipment.status}</div>
+                  <div className="text-emerald-800 mb-1">Supplier: {shipment.supplierId}</div>
+                  <div className="text-emerald-800 mb-1">Retailer: {shipment.retailerId}</div>
+                  {sensorData[shipment.id] ? (
+                    <ul className="text-emerald-900 text-base mb-2">
+                      <li>🌡 Temp: <b>{sensorData[shipment.id].temperature}</b> °C</li>
+                      <li>💧 Humidity: <b>{sensorData[shipment.id].humidity}</b> %</li>
+                      <li>🪫 Gas Level: <b>{sensorData[shipment.id].gasLevel}</b></li>
+                      <li>⚖ Weight: <b>{sensorData[shipment.id].weight}</b> kg</li>
+                      <li>📍 Location: <b>Lat {sensorData[shipment.id].location?.lat?.toFixed(4)}, Lng {sensorData[shipment.id].location?.lng?.toFixed(4)}</b></li>
+                    </ul>
+                  ) : (
+                    <div className="text-emerald-600 italic">No sensor data yet.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {/* Product Creation Form */}
         <section className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 p-6 shadow-xl mb-8">
           <h2 className="text-2xl font-semibold text-emerald-900 mb-4">➕ Add New Product</h2>
@@ -186,6 +237,45 @@ export default function FarmerDashboard() {
             <button type="submit" className="col-span-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-semibold py-3 rounded-xl shadow-xl transition-all duration-200 disabled:opacity-60" disabled={formLoading}>{formLoading ? 'Adding...' : 'Add Product'}</button>
           </form>
           {formMsg && <div className="mt-2 text-emerald-800 font-medium">{formMsg}</div>}
+        </section>
+        {/* Assign Shipments Section */}
+        <section className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 p-6 shadow-xl mb-8">
+          <h2 className="text-2xl font-semibold text-emerald-900 mb-4">Assign Shipments to Suppliers</h2>
+          {orders.filter(o => o.status === 'paid' && !o.supplierId).length === 0 ? (
+            <p className="text-emerald-600 italic">No paid orders awaiting shipment assignment.</p>
+          ) : (
+            <ul className="space-y-3">
+              {orders.filter(o => o.status === 'paid' && !o.supplierId).map((o) => (
+                <li key={o.id} className="bg-white/20 rounded-xl p-4 shadow-inner border border-white/20 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div>
+                    <div className="font-bold text-emerald-900">{productMap[o.productId]?.name || o.productId}</div>
+                    <div className="text-emerald-800">Quantity: {o.quantity}</div>
+                    <div className="text-emerald-800">Retailer: {o.retailerId}</div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <select
+                      className="p-2 rounded-xl border border-emerald-300"
+                      value={assigning[o.id] || ''}
+                      onChange={e => setAssigning(a => ({ ...a, [o.id]: e.target.value }))}
+                    >
+                      <option value="">-- Select Supplier --</option>
+                      {suppliers.map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.name || 'Unnamed Supplier'}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl shadow"
+                      onClick={() => handleAssignShipment(o)}
+                    >
+                      Assign Shipment
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
         {/* Farmer's Products Section */}
         <section className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 p-6 shadow-xl mb-8">
@@ -281,18 +371,27 @@ export default function FarmerDashboard() {
             <p className="text-emerald-600 italic">No shipments or sensor data available.</p>
           ) : (
             <div className="grid gap-6 sm:grid-cols-2">
-              {shipments.map(({ shipment, latestData, alerts }) => (
+              {shipments.map(({ shipment, alerts }) => (
                 <div key={shipment.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  {/* Start sensor simulation for assigned, pending, or in transit shipments only */}
+                  {(shipment.status === 'assigned' || shipment.status === 'pending' || shipment.status === 'in transit') && <SensorSimulator shipmentId={shipment.id} />}
                   <div className="font-bold text-emerald-900 mb-2">Shipment ID: {shipment.id}</div>
                   <div className="text-emerald-800 mb-1">Product: {productMap[shipment.productId]?.name || shipment.productId}</div>
                   <div className="text-emerald-800 mb-1">Status: {shipment.status}</div>
-                  {latestData ? (
+                  {shipment.status === 'delivered' && (
+                    <>
+                      <div className="text-emerald-700">Delivered at: {shipment.deliveredAt?.toDate?.().toLocaleString?.() || shipment.deliveredAt}</div>
+                      <div className="text-emerald-700">Supplier: {shipment.supplierId}</div>
+                      <div className="text-emerald-700">Retailer: {shipment.retailerId}</div>
+                    </>
+                  )}
+                  {sensorData[shipment.id] ? (
                     <ul className="text-emerald-900 text-base mb-2">
-                      <li>🌡 Temp: <b>{latestData.temperature}</b> °C</li>
-                      <li>💧 Humidity: <b>{latestData.humidity}</b> %</li>
-                      <li>🪫 Gas Level: <b>{latestData.gasLevel}</b></li>
-                      <li>⚖ Weight: <b>{latestData.weight}</b> kg</li>
-                      <li>📍 Location: <b>Lat {latestData.location?.lat?.toFixed(4)}, Lng {latestData.location?.lng?.toFixed(4)}</b></li>
+                      <li>🌡 Temp: <b>{sensorData[shipment.id].temperature}</b> °C</li>
+                      <li>💧 Humidity: <b>{sensorData[shipment.id].humidity}</b> %</li>
+                      <li>🪫 Gas Level: <b>{sensorData[shipment.id].gasLevel}</b></li>
+                      <li>⚖ Weight: <b>{sensorData[shipment.id].weight}</b> kg</li>
+                      <li>📍 Location: <b>Lat {sensorData[shipment.id].location?.lat?.toFixed(4)}, Lng {sensorData[shipment.id].location?.lng?.toFixed(4)}</b></li>
                     </ul>
                   ) : (
                     <div className="text-emerald-600 italic">No sensor data yet.</div>

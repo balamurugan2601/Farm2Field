@@ -10,9 +10,12 @@ import {
   updateDoc,
   doc,
   onSnapshot,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 import Web3 from 'web3';
 import contract from '../services/contract';
+import SensorSimulator from '../components/SensorSimulator'; // Added import for SensorSimulator
 
 export default function RetailerDashboard() {
   const [orders, setOrders] = useState([]);
@@ -24,6 +27,7 @@ export default function RetailerDashboard() {
   const [retailerStock, setRetailerStock] = useState([]);
   // Add state for order quantity
   const [orderQuantity, setOrderQuantity] = useState({});
+  const [sensorData, setSensorData] = useState({}); // {shipmentId: latestData}
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((u) => setUser(u));
@@ -68,19 +72,6 @@ export default function RetailerDashboard() {
     return () => { unsubOrders(); unsubAllProducts(); unsubRetailerStock(); };
   }, [user]);
 
-  // Mark order as assigned (when shipment is created)
-  const markAssigned = async (orderId, supplierId) => {
-    if (!supplierId) {
-      alert('No supplier assigned yet. Assign a supplier before marking as assigned.');
-      return;
-    }
-    await updateDoc(doc(db, 'orders', orderId), {
-      status: 'assigned',
-      supplierId,
-      statusUpdatedAt: serverTimestamp(),
-    });
-  };
-
   // Confirm delivery (retailer side)
   const confirmDelivery = async (order) => {
     try {
@@ -101,7 +92,7 @@ export default function RetailerDashboard() {
       alert('✅ Delivery confirmed and logged on blockchain');
     } catch (err) {
       console.error(err);
-      alert('❌ Failed to confirm delivery or log on blockchain');
+      alert('❌ Failed to confirm delivery or log on blockchain: ' + (err?.message || err));
     }
   };
 
@@ -157,6 +148,7 @@ export default function RetailerDashboard() {
       await addDoc(collection(db, 'orders'), {
         productId: product.id,
         retailerId: user.uid,
+        farmerId: product.farmerId, // <-- Add farmerId to the order
         quantity,
         total,
         status: 'placed',
@@ -192,6 +184,24 @@ export default function RetailerDashboard() {
       alert('❌ Payment failed or rejected: ' + (err?.message || err));
     }
   };
+
+  // Fetch latest sensor data for each shipment every 3 seconds
+  useEffect(() => {
+    const shipmentIds = Object.values(shipments).map(s => s.id);
+    if (!shipmentIds.length) return;
+    const interval = setInterval(async () => {
+      const newSensorData = {};
+      for (const id of shipmentIds) {
+        const q = query(collection(db, 'shipments', id, 'sensorData'), orderBy('timestamp', 'desc'), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          newSensorData[id] = snap.docs[0].data();
+        }
+      }
+      setSensorData(newSensorData);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [shipments]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-100 to-emerald-300 p-8 font-montserrat">
@@ -245,17 +255,93 @@ export default function RetailerDashboard() {
             <ul className="space-y-3">
               {retailerStock.filter(s => s.retailerId === user?.uid).map((s) => {
                 const prod = allProducts.find(p => p.id === s.productId);
+                // Find the latest active shipment for this product
+                const activeShipment = Object.values(shipments).find(sh => sh.productId === s.productId && (sh.status === 'assigned' || sh.status === 'pending' || sh.status === 'in transit'));
                 return (
                   <li key={s.id} className="bg-white/20 rounded-xl p-4 shadow-inner border border-white/20 flex items-center justify-between gap-4">
+                    {/* Start sensor simulation for assigned, pending, or in transit shipments only */}
+                    {activeShipment && <SensorSimulator shipmentId={activeShipment.id} />}
                     <div>
                       <div className="font-bold text-emerald-900">{prod?.name || s.productId}</div>
                       <div className="text-emerald-800">Category: {prod?.category}</div>
                       <div className="text-emerald-800">Quantity: {s.quantity} {prod?.unit}</div>
+                      {activeShipment && sensorData[activeShipment.id] ? (
+                        <ul className="text-emerald-900 text-base mb-2">
+                          <li>🌡 Temp: <b>{sensorData[activeShipment.id].temperature}</b> °C</li>
+                          <li>💧 Humidity: <b>{sensorData[activeShipment.id].humidity}</b> %</li>
+                          <li>🪫 Gas Level: <b>{sensorData[activeShipment.id].gasLevel}</b></li>
+                          <li>⚖ Weight: <b>{sensorData[activeShipment.id].weight}</b> kg</li>
+                          <li>📍 Location: <b>Lat {sensorData[activeShipment.id].location?.lat?.toFixed(4)}, Lng {sensorData[activeShipment.id].location?.lng?.toFixed(4)}</b></li>
+                        </ul>
+                      ) : (
+                        <div className="text-emerald-600 italic">No sensor data yet.</div>
+                      )}
                     </div>
+                    {activeShipment && (
+                      <span className="bg-emerald-200 text-emerald-900 font-semibold px-3 py-1 rounded-full shadow">Stock updated after delivery</span>
+                    )}
                   </li>
                 );
               })}
             </ul>
+          )}
+        </div>
+        {/* Dedicated Shipments & Sensor Data Section */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 shadow-xl p-8 mb-8">
+          <h2 className="text-2xl font-semibold text-emerald-900 mb-4">📦 Your Shipments & Live Sensor Data</h2>
+          {Object.values(shipments).filter(s => s.retailerId === user?.uid).length === 0 ? (
+            <p className="text-emerald-600 italic">No shipments assigned yet.</p>
+          ) : (
+            <div className="grid gap-6 sm:grid-cols-2">
+              {Object.values(shipments).filter(s => s.retailerId === user?.uid).map((s) => (
+                <div key={s.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  <div className="font-bold text-emerald-900 mb-2">Shipment ID: {s.id}</div>
+                  <div className="text-emerald-800 mb-1">Product: {productMap[s.productId]?.name || s.productId}</div>
+                  <div className="text-emerald-800 mb-1">Status: {s.status}</div>
+                  <div className="text-emerald-800 mb-1">Supplier: {s.supplierId}</div>
+                  {sensorData[s.id] ? (
+                    <ul className="text-emerald-900 text-base mb-2">
+                      <li>🌡 Temp: <b>{sensorData[s.id].temperature}</b> °C</li>
+                      <li>💧 Humidity: <b>{sensorData[s.id].humidity}</b> %</li>
+                      <li>🪫 Gas Level: <b>{sensorData[s.id].gasLevel}</b></li>
+                      <li>⚖ Weight: <b>{sensorData[s.id].weight}</b> kg</li>
+                      <li>📍 Location: <b>Lat {sensorData[s.id].location?.lat?.toFixed(4)}, Lng {sensorData[s.id].location?.lng?.toFixed(4)}</b></li>
+                    </ul>
+                  ) : (
+                    <div className="text-emerald-600 italic">No sensor data yet.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Live Sensor Data Block (copied from SupplierDashboard) */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 shadow-xl p-8 mb-8">
+          <h2 className="text-2xl font-semibold text-emerald-900 mb-4">🚚 Live Sensor Data for Your Shipments</h2>
+          {Object.values(shipments).filter(s => s.retailerId === user?.uid).length === 0 ? (
+            <p className="text-emerald-600 italic">No shipments assigned yet.</p>
+          ) : (
+            <div className="grid gap-6 sm:grid-cols-2">
+              {Object.values(shipments).filter(s => s.retailerId === user?.uid).map((s) => (
+                <div key={s.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  <div className="font-bold text-emerald-900 mb-2">Shipment ID: {s.id}</div>
+                  <div className="text-emerald-800 mb-1">Product: {productMap[s.productId]?.name || s.productId}</div>
+                  <div className="text-emerald-800 mb-1">Status: {s.status}</div>
+                  <div className="text-emerald-800 mb-1">Supplier: {s.supplierId}</div>
+                  {sensorData[s.id] ? (
+                    <ul className="text-emerald-900 text-base mb-2">
+                      <li>🌡 Temp: <b>{sensorData[s.id].temperature}</b> °C</li>
+                      <li>💧 Humidity: <b>{sensorData[s.id].humidity}</b> %</li>
+                      <li>🪫 Gas Level: <b>{sensorData[s.id].gasLevel}</b></li>
+                      <li>⚖ Weight: <b>{sensorData[s.id].weight}</b> kg</li>
+                      <li>📍 Location: <b>Lat {sensorData[s.id].location?.lat?.toFixed(4)}, Lng {sensorData[s.id].location?.lng?.toFixed(4)}</b></li>
+                    </ul>
+                  ) : (
+                    <div className="text-emerald-600 italic">No sensor data yet.</div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 shadow-xl p-8">
@@ -264,45 +350,52 @@ export default function RetailerDashboard() {
             <p className="text-emerald-700">No orders yet.</p>
           ) : (
             <ul className="space-y-4">
-              {orders.map((o) => (
-                <li key={o.id} className="bg-white/20 rounded-xl p-6 flex flex-col md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="font-semibold text-emerald-900">Order ID: {o.id}</div>
-                    <div className="text-emerald-800">Product: {productMap[o.productId]?.name || o.productId}</div>
-                    <div className="text-emerald-800">Retailer: {o.retailerId}</div>
-                    <div className="text-emerald-800">Supplier: {o.supplierId || 'Not assigned'}</div>
-                    <div className="text-emerald-800">Quantity: {o.quantity}</div>
-                    <div className="text-emerald-800">Total: ₹{o.total}</div>
-                    <div className="text-emerald-800">Status: {o.status}</div>
-                    {shipments[o.id] && (
-                      <div className="text-emerald-700">Shipment Status: {shipments[o.id].status}</div>
-                    )}
-                    {o.status === 'delivered' && <div className="text-emerald-700">Delivered at: {o.deliveredAt?.toDate?.().toLocaleString?.() || ''}</div>}
-                  </div>
-                  <div className="mt-4 md:mt-0 flex flex-col gap-2">
-                    {o.status === 'assigned' && o.supplierId ? (
-                      <button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl shadow" onClick={() => markAssigned(o.id, o.supplierId)}>Mark as Assigned</button>
-                    ) : o.status === 'assigned' && !o.supplierId ? (
-                      <span className="text-emerald-700">No supplier assigned yet</span>
-                    ) : null}
-                    {o.status === 'shipped' && (
-                      <span className="text-emerald-700">In Transit</span>
-                    )}
-                    {o.status === 'delivered' && !o.paidAt && (
-                      <button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl shadow" onClick={() => confirmDelivery(o)}>Confirm Delivery</button>
-                    )}
-                    {o.status !== 'paid' && (
-                      <button
-                        onClick={() => handlePayment(o)}
-                        className="mt-2 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-semibold px-4 py-2 rounded-xl shadow-xl transition-all duration-200"
-                      >
-                        Make Payment
-                      </button>
-                    )}
-                    {o.status === 'paid' && <span className="text-emerald-700">Paid</span>}
-                  </div>
-                </li>
-              ))}
+              {orders.map((o) => {
+                const shipment = Object.values(shipments).find(s => s.productId === o.productId && s.supplierId === o.supplierId && (s.status === 'assigned' || s.status === 'pending' || s.status === 'in transit' || s.status === 'delivered'));
+                return (
+                  <li key={o.id} className="bg-white/20 rounded-xl p-6 flex flex-col md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="font-semibold text-emerald-900">Order ID: {o.id}</div>
+                      <div className="text-emerald-800">Product: {productMap[o.productId]?.name || o.productId}</div>
+                      <div className="text-emerald-800">Retailer: {o.retailerId}</div>
+                      <div className="text-emerald-800">Status: {o.status}</div>
+                      {o.status === 'delivered' && o.deliveredAt && (
+                        <div className="text-emerald-700 text-sm">Delivered at: {o.deliveredAt.toDate?.().toLocaleString?.() || o.deliveredAt}</div>
+                      )}
+                      {o.status === 'delivered' && o.supplierId && (
+                        <div className="text-emerald-700 text-sm">Supplier: {o.supplierId}</div>
+                      )}
+                      {/* Show sensor data if available and shipment is not delivered */}
+                      {shipment && (shipment.status === 'assigned' || shipment.status === 'pending' || shipment.status === 'in transit') && sensorData[shipment.id] ? (
+                        <ul className="text-emerald-900 text-base mb-2">
+                          <li>🌡 Temp: <b>{sensorData[shipment.id].temperature}</b> °C</li>
+                          <li>💧 Humidity: <b>{sensorData[shipment.id].humidity}</b> %</li>
+                          <li>🪫 Gas Level: <b>{sensorData[shipment.id].gasLevel}</b></li>
+                          <li>⚖ Weight: <b>{sensorData[shipment.id].weight}</b> kg</li>
+                          <li>📍 Location: <b>Lat {sensorData[shipment.id].location?.lat?.toFixed(4)}, Lng {sensorData[shipment.id].location?.lng?.toFixed(4)}</b></li>
+                        </ul>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 md:mt-0 flex flex-col gap-2">
+                      {o.status === 'shipped' && (
+                        <span className="text-emerald-700">In Transit</span>
+                      )}
+                      {o.status === 'delivered' && !o.paidAt && (
+                        <button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl shadow" onClick={() => confirmDelivery(o)}>Confirm Delivery</button>
+                      )}
+                      {o.status !== 'paid' && (
+                        <button
+                          onClick={() => handlePayment(o)}
+                          className="mt-2 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-semibold px-4 py-2 rounded-xl shadow-xl transition-all duration-200"
+                        >
+                          Make Payment
+                        </button>
+                      )}
+                      {o.status === 'paid' && <span className="text-emerald-700">Paid</span>}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

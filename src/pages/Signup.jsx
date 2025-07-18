@@ -8,13 +8,14 @@ export default function Signup() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('farmer');
+  const [name, setName] = useState('');
   const navigate = useNavigate();
 
   const handleSignup = async (e) => {
     e.preventDefault();
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await setDoc(doc(db, 'users', userCredential.user.uid), { role });
+      await setDoc(doc(db, 'users', userCredential.user.uid), { role, name });
       navigate(`/${role}-dashboard`);
     } catch {
       alert('Signup failed. Please try again.');
@@ -29,6 +30,21 @@ export default function Signup() {
       >
         <h2 className="text-3xl font-bold text-center text-emerald-900 drop-shadow">Create Your Account</h2>
         <p className="text-sm text-center text-emerald-700">Sign up to join as a stakeholder</p>
+
+        <div>
+          <label htmlFor="name" className="block text-sm font-medium text-emerald-900 mb-1">
+            Name
+          </label>
+          <input
+            id="name"
+            type="text"
+            placeholder="Your Name"
+            className="w-full px-4 py-2 bg-white/20 text-emerald-900 border border-white/20 rounded-xl backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-emerald-400 shadow-inner placeholder-emerald-500 transition"
+            onChange={(e) => setName(e.target.value)}
+            value={name}
+            required
+          />
+        </div>
 
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-emerald-900 mb-1">
@@ -70,7 +86,7 @@ export default function Signup() {
           >
             <option value="farmer">👨‍🌾 Farmer</option>
             <option value="retailer">🏪 Retailer</option>
-            <option value="supplier">�� Supplier</option>
+            <option value="supplier">🛍️ Supplier</option>
           </select>
         </div>
 

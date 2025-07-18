@@ -30,7 +30,7 @@ export default function SensorSimulator({ shipmentId }) {
       } catch (e) {
         console.error('Sensor data push error:', e);
       }
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [shipmentId]);
