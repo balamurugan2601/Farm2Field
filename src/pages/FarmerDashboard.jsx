@@ -204,6 +204,8 @@ export default function FarmerDashboard() {
             <div className="grid gap-6 sm:grid-cols-2">
               {shipments.map(({ shipment }) => (
                 <div key={shipment.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  {/* Start sensor simulation for assigned, pending, or in transit shipments only */}
+                  {(shipment.status === 'assigned' || shipment.status === 'pending' || shipment.status === 'in transit') && <SensorSimulator shipmentId={shipment.id} />}
                   <div className="font-bold text-emerald-900 mb-2">Shipment ID: {shipment.id}</div>
                   <div className="text-emerald-800 mb-1">Product: {productMap[shipment.productId]?.name || shipment.productId}</div>
                   <div className="text-emerald-800 mb-1">Status: {shipment.status}</div>

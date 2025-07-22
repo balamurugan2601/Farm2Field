@@ -324,6 +324,8 @@ export default function RetailerDashboard() {
             <div className="grid gap-6 sm:grid-cols-2">
               {Object.values(shipments).filter(s => s.retailerId === user?.uid).map((s) => (
                 <div key={s.id} className="bg-white/20 p-4 rounded-xl shadow-inner border border-white/20">
+                  {/* Start sensor simulation for assigned, pending, or in transit shipments only */}
+                  {(s.status === 'assigned' || s.status === 'pending' || s.status === 'in transit') && <SensorSimulator shipmentId={s.id} />}
                   <div className="font-bold text-emerald-900 mb-2">Shipment ID: {s.id}</div>
                   <div className="text-emerald-800 mb-1">Product: {productMap[s.productId]?.name || s.productId}</div>
                   <div className="text-emerald-800 mb-1">Status: {s.status}</div>
